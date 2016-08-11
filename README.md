@@ -60,10 +60,10 @@ Once we know what services we want to add to MyProject, we can go ahead and add 
 
     # fly service create <unique-project-name> <image-name>...
     $ fly service create MyProject \
-        && mysql \
-        && bitnami/apache:latest \
-        && redis \
-        && php:5.6-alpine
+        mysql \
+        bitnami/apache:latest \
+        redis \
+        php:5.6-alpine
 
 > **NOTE:** This is the equivalent of manually creating a `docker-compose.yml` file.
 
@@ -152,7 +152,7 @@ We can also read a variable with:
 
 We can also search for variables.
 
-### Setting Service Options
+### Setting Service Options - TODO
 The MySQL container also allows you to place an SQL file in a directory and if you mount that directory to `/docker-entrypoint-initdb.d` of the container, that SQL file will be imported into the database.
 
 You can also mount a directory from your host machine to `/var/lib/mysql` so that the containers MySQL data files state will be saved on your host machine so that the data is not lost on exit of the container.
