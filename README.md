@@ -1,3 +1,7 @@
+# NOTE
+Fly is written in Bash, for now, because it's a convenient language for quick prototyping.
+When I get some time, it will be rewritten in Python, probably using [Hug](https://github.com/timothycrosley/hug "Hug").
+
 # Requirements
  1. Docker Compose
  2. SQLite
