@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+#
+# Requirements:
+#   - Docker Compose
+#   - SQLite
+#
+# @TODO
+# Create equivalents for:
+#    docker-compose build
+#
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+FLY_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FLY_BASE="$(cd "$(dirname $FLY_BIN)" && pwd)"
+FLY_TIMESTAMP=$(date +%s)
+
+. "${FLY_BIN}/_db.sh"
+
+# fly project create <unique-project-name> <project-path>
+#
+# This will create the dir if it doesn't, exist, along with a .fly/ dir.
+# It will also create an entry in Fly's database mapping the unique-project-name to the project-path.
+Project.create() {
+
+#    sqlite3 "$DB_FILE" "DELETE FROM data where 1"
+
+    Db.insert 'data' 'name, path, created' "'$1', '$2', '$FLY_TIMESTAMP'"
+    echo "Creating directory: $2/.fly"
+    mkdir -p "$2/.fly"
+}
+
+# fly project list
+Project.list() {
+    PROJECT_LIST=`sqlite3 "$DB_FILE" "SELECT * FROM data"`;
+    COLUMNS="NAME PATH CREATED"
+
+    FIRST=''
+    for ROW in $PROJECT_LIST; do
+        if [ -z "$FIRST" ]; then
+            printf "$COLUMNS\n"
+        fi
+
+        FIRST=$ROW
+        PROJECT_NAME=`echo $ROW | awk '{split($0,a,"|"); print a[1]}'`
+        PROJECT_PATH=`echo $ROW | awk '{split($0,a,"|"); print a[2]}'`
+        PROJECT_CREATED=`echo $ROW | awk '{split($0,a,"|"); print a[3]}'`
+        # PROJECT_CREATED="$(date -d @$PROJECT_CREATED)"
+        printf "$PROJECT_NAME $PROJECT_PATH $PROJECT_CREATED\n"
+    done | column -t
+}
+
+# fly project up <unique-project-name>
+Project.up() {
+    FLY_PROJECT_PATH=`sqlite3 "$DB_FILE" "SELECT path FROM data WHERE name='$1'"`;
+    $(cd "${FLY_PROJECT_PATH}/.fly" && docker-compose up)
+}
+
+# fly project down <unique-project-name>
+Project.down() {
+    FLY_PROJECT_PATH=`sqlite3 "$DB_FILE" "SELECT path FROM data WHERE name='$1'"`;
+    $(cd "${FLY_PROJECT_PATH}/.fly" && docker-compose down)
+}
+
+# fly container set <unique-project-name> <image-name> <container-env> <value>
+Container.set() {
+    FLY_PROJECT_PATH=`sqlite3 "$DB_FILE" "SELECT path FROM data WHERE name='$1'"`;
+
+    if grep -iq "${3}" "${FLY_PROJECT_PATH}/.fly/${2}.env"; then
+        sed -i -e "s/\(${3}\)=.*/\1=${4}/g" "${FLY_PROJECT_PATH}/.fly/${2}.env"
+    else
+        echo "${3}=${4}" >> "${FLY_PROJECT_PATH}/.fly/${2}.env"
+    fi
+}
+
+# fly container get <unique-project-name> <image-name> <container-env>
+Container.get() {
+    FLY_PROJECT_PATH=`sqlite3 "$DB_FILE" "SELECT path FROM data WHERE name='$1'"`;
+    grep -oP "${3}=\K.*" "${FLY_PROJECT_PATH}/.fly/${2}.env"
+}
+
+# fly service search <image-name>
+#
+# Searches for images on Docker Hub.
+Service.search() {
+    $(echo docker search $1)
+}
+
+# fly services create <unique-project-name> <image-name>...
+#
+# @TODO: The main service container must use an image, or it won't run.
+#        I'm currently using `tianon/true` but must find out if we can avoid that.
+# Creates the docker-compose.yml and the relevant .env files containing the services for the images.
+Service.create() {
+    FLY_PROJECT_NAME="$1"
+    shift
+
+    FLY_PROJECT_PATH=`sqlite3 "$DB_FILE" "SELECT path FROM data WHERE name='$FLY_PROJECT_NAME'"`;
+    FLY_SERVICE_DEPENDENCY_TPL=$(cat "$FLY_BASE/templates/service_dependency.tpl")
+    FLY_SERVICE_DEPENDENCIES_TPL=$(cat "$FLY_BASE/templates/service_dependencies.tpl")
+    FLY_SERVICE_MAIN_TPL=$(cat "$FLY_BASE/templates/service_main.tpl")
+
+    # Split string, delimited by space, into array.
+    FLY_IMAGES=(${@//" "/ })
+    for img_index in "${!FLY_IMAGES[@]}"; do
+        FLY_IMAGE_NAME="${FLY_IMAGES[$img_index]}"
+
+        # Replace ':' and '\' with '.'
+        FLY_SERVICE_NAME=${FLY_IMAGE_NAME//:/.}
+        FLY_SERVICE_NAME=${FLY_SERVICE_NAME//\//.}
+
+        # Construct dependency template string.
+        DEPENDENCY_STRING="${DEPENDENCY_STRING}${FLY_SERVICE_DEPENDENCY_TPL//"<service_name>"/"${FLY_SERVICE_NAME}"}"
+
+        # Construct dependencies template string.
+        FLY_SERVICE_DEPENDENCIES="${FLY_SERVICE_DEPENDENCIES_TPL//"<service_name>"/"${FLY_SERVICE_NAME}"}"
+        FLY_SERVICE_DEPENDENCIES="${FLY_SERVICE_DEPENDENCIES//"<image_name>"/"${FLY_IMAGE_NAME}"}"
+        FLY_SERVICE_DEPENDENCIES="${FLY_SERVICE_DEPENDENCIES//"<project_path>"/"${FLY_PROJECT_PATH}"}"
+
+        DEPENDENCIES_STRING="${DEPENDENCIES_STRING}${FLY_SERVICE_DEPENDENCIES}"
+
+        touch "${FLY_PROJECT_PATH}"/.fly/"${FLY_SERVICE_NAME}".env
+    done
+
+    FLY_SERVICE_MAIN="${FLY_SERVICE_MAIN_TPL//"<project_name>"/"${FLY_PROJECT_NAME}"}"
+    FLY_SERVICE_MAIN="${FLY_SERVICE_MAIN//"<service_dependency>"/"${DEPENDENCY_STRING}"}"
+    FLY_SERVICE_MAIN="${FLY_SERVICE_MAIN//"<service_dependencies>"/"${DEPENDENCIES_STRING}"}"
+    echo "$FLY_SERVICE_MAIN" > "${FLY_PROJECT_PATH}/.fly/docker-compose.yml"
+}
+
+case "$1" in
+    project)
+        case "$2" in
+            create)
+                Project.create "$3" "$4"
+            ;;
+
+            list)
+                Project.list
+            ;;
+
+            up)
+                Project.up "$3"
+            ;;
+
+            down)
+                Project.down "$3"
+            ;;
+        esac
+    ;;
+
+    service)
+        case "$2" in
+            search)
+                Service.search "$3"
+            ;;
+
+            create)
+                FLY_PROJECT_NAME="$3"
+                shift 3
+                Service.create "$FLY_PROJECT_NAME" "$@"
+            ;;
+        esac
+    ;;
+
+    container)
+        case "$2" in
+            set)
+                Container.set "$3" "$4" "$5" "$6"
+            ;;
+
+            get)
+                Container.get "$3" "$4" "$5"
+            ;;
+        esac
+    ;;
+esac
+
+exit 0
