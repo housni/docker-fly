@@ -103,6 +103,8 @@ Service.create() {
     FLY_SERVICE_DEPENDENCIES_TPL=$(cat "$FLY_BASE/templates/service_dependencies.tpl")
     FLY_SERVICE_MAIN_TPL=$(cat "$FLY_BASE/templates/service_main.tpl")
 
+    DEPENDENCY_STRING=''
+    DEPENDENCIES_STRING=''
     # Split string, delimited by space, into array.
     FLY_IMAGES=(${@//" "/ })
     for img_index in "${!FLY_IMAGES[@]}"; do
